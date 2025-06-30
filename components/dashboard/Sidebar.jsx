@@ -52,13 +52,13 @@ export default function Sidebar() {
 function getPath(label) {
     switch (label) {
         case 'Home':
-            return '/main/home/overview';
+            return '/main/overview';
         case 'Lettuce':
             return '/main/lettuce';
         case 'Water Tank':
-            return '/main/home/water_tank';
+            return '/main/watertank';
         case 'Mobile Application':
-            return '/main/home/mobileapp';
+            return '/main/mobileapp';
         case 'Logout':
             return '/';
         default:

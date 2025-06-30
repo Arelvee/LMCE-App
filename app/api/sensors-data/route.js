@@ -14,7 +14,7 @@ export async function GET() {
     const readings = await db.all(`
       SELECT * FROM lettuce_wavelet
       ORDER BY timestamp DESC
-      LIMIT 50
+      LIMIT 13826
     `);
 
     await db.close();
