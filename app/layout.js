@@ -3,6 +3,9 @@
 import localFont from "next/font/local";
 import "../styles/main.sass";
 import Head from "next/head"; // Import Head for managing the document head
+import { initializeDatabase } from '@/lib/initDB';
+// Initialize the database
+initializeDatabase();
 
 const geistSans = localFont({
   src: "./fonts/GeistVF.woff",

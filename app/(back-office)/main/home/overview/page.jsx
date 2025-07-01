@@ -4,10 +4,10 @@ import { SiFlask, SiSqlite, SiEspressif, SiPython, SiTensorflow, SiMongodb, SiDw
 
 export default function Dashboard() {
   return (
-    <div className="container mx-auto p-4 md:p-8 space-y-12">
+    <div className="container mx-auto p-4 md:p-8 space-y-12 p-4 sm:p-6 ml-0 md:ml-20">
       <header className="text-center mb-12">
         <h2 className="text-2x1 md:text-5xl font-extrabold text-transparent bg-clip-text bg-gradient-to-r from-green-950 to-slate-800">
-          IoT-Based Web Application for Crop Monitoring and Yield Prediction using Daubechies Wavelet and Neural Networks
+          Crop Yield Prediction Model for Indoor Lettuce Vertical Farm
         </h2>
         <p className="text-gray-600 mt-4 text-base md:text-lg">
           An advanced IoT-driven application leveraging AI and ML for crop monitoring in vertical farms.

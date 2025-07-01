@@ -172,9 +172,9 @@ export default function Lettuce() {
   }
 
   return (
-    <div className="p-4 sm:p-6 bg-gray-50 min-h-screen">
+    <div className="p-4 sm:p-6 bg-gray-50 min-h-screen p-4 sm:p-6 ml-0 md:ml-20">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 space-y-4 sm:space-y-0">
+      <div className="flex flex-col sm:flex-row sm:justify-between sm:items-center mb-6 space-y-4 sm:space-y-0 ">
         <h1 className="text-2xl sm:text-3xl font-bold text-green-800">🌱 Lettuce Growth Stage, Yield Prediction and Sensor Data</h1>
         <div className="flex space-x-2">
           <button 
