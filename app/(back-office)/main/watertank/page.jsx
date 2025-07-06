@@ -64,6 +64,13 @@ const LoadingSkeleton = () => {
   );
 };
 
+// Helper function to get current Manila time
+const getManilaTime = () => {
+  const now = new Date();
+  const utc = now.getTime() + (now.getTimezoneOffset() * 60000);
+  return new Date(utc + (3600000 * 8)); // UTC+8 for Manila
+};
+
 export default function WaterTank() {
   const [sensorData, setSensorData] = useState([]);
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -71,6 +78,7 @@ export default function WaterTank() {
   const [isLoading, setIsLoading] = useState(true);
   const [lastUpdated, setLastUpdated] = useState(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [fetchError, setFetchError] = useState(null);
 
   const sensors = [
     { label: 'TDS Level', key: 'tds', unit: 'ppm', min: 600, max: 800, icon: <FiActivity className="text-blue-500" /> },
@@ -81,12 +89,33 @@ export default function WaterTank() {
   const fetchData = async () => {
     try {
       setIsRefreshing(true);
-      const response = await fetch('/api/sensors-data');
+      setFetchError(null);
+
+      const response = await fetch(`/api/sensors-data?t=${new Date().getTime()}`);
+
+      if (!response.ok) {
+        throw new Error(`Failed to fetch data: ${response.status} ${response.statusText}`);
+      }
+
       const data = await response.json();
-      setSensorData(data);
-      setLastUpdated(new Date());
+
+      // Parse timestamps to Manila time
+      const parsedData = data.map(item => {
+        // Convert server UTC time to Manila time (UTC+8)
+        const serverDate = new Date(item.timestamp);
+        const manilaTime = new Date(serverDate.getTime() + (8 * 60 * 60 * 1000));
+
+        return {
+          ...item,
+          parsedTimestamp: manilaTime
+        };
+      }).sort((a, b) => b.parsedTimestamp - a.parsedTimestamp); // Sort descending
+
+      setSensorData(parsedData);
+      setLastUpdated(getManilaTime());
     } catch (err) {
       console.error('Data fetch error:', err);
+      setFetchError(err.message || 'Failed to fetch sensor data');
     } finally {
       setIsLoading(false);
       setIsRefreshing(false);
@@ -99,10 +128,51 @@ export default function WaterTank() {
     return () => clearInterval(interval);
   }, []);
 
-  const latestSensor = sensorData[0] || {};
+  // Function to get the latest reading
+  const getLatestReading = () => {
+    if (sensorData.length === 0) return {};
+    return sensorData[0]; // First element is the latest
+  };
+
+  // Get latest reading
+  const latestReading = getLatestReading();
+
+  // Get readings for the last 24 hours for trends (in Manila time)
+  // Modified getLast24HoursData function to only return last 10 hours
+  const getLast24HoursData = () => {
+    if (sensorData.length === 0) return [];
+
+    const now = getManilaTime();
+    const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+
+    // Group readings by hour in Manila time
+    const hourlyData = {};
+
+    sensorData.forEach(reading => {
+      const readingTime = reading.parsedTimestamp;
+      if (readingTime < twentyFourHoursAgo) return;
+
+      // Create hour key in Manila time (YYYY-MM-DD-HH)
+      const hourKey = readingTime.toISOString().slice(0, 13).replace('T', '-');
+
+      // Only keep the latest reading for each hour
+      if (!hourlyData[hourKey] ||
+        readingTime > hourlyData[hourKey].parsedTimestamp) {
+        hourlyData[hourKey] = reading;
+      }
+    });
+
+    // Convert to array, sort descending, and take only last 10 hours
+    return Object.values(hourlyData)
+      .sort((a, b) => b.parsedTimestamp - a.parsedTimestamp)
+      .slice(0, 10); // Only show last 10 hours
+  };
+
+  const last24HoursData = getLast24HoursData();
 
   const getPumpStatus = () => {
-    const hour = new Date().getHours();
+    const manilaTime = getManilaTime();
+    const hour = manilaTime.getHours();
     return hour >= 6 && hour < 18 ? "ON" : "OFF";
   };
 
@@ -115,22 +185,34 @@ export default function WaterTank() {
     return 'optimal';
   };
 
-  const formatTime = (timestamp) => {
-    if (!timestamp) return 'N/A';
-    const date = new Date(timestamp);
+  // Format time in Manila time
+  const formatTime = (date) => {
+    if (!(date instanceof Date)) {
+      try {
+        date = new Date(date);
+      } catch {
+        return 'N/A';
+      }
+    }
+
+    if (isNaN(date)) return 'N/A';
+
     return date.toLocaleTimeString('en-US', {
       hour: '2-digit',
       minute: '2-digit',
-      hour12: true
+      hour12: true,
+      timeZone: 'Asia/Manila'
     });
   };
 
+  // Format date in Manila time
   const formatDate = (date) => {
     if (!date) return 'N/A';
     return date.toLocaleDateString('en-US', {
       month: 'short',
       day: 'numeric',
-      year: 'numeric'
+      year: 'numeric',
+      timeZone: 'Asia/Manila'
     });
   };
 
@@ -139,7 +221,7 @@ export default function WaterTank() {
     const recommendations = [];
 
     // TDS recommendations
-    const tdsValue = latestSensor.tds;
+    const tdsValue = latestReading.tds;
     if (tdsValue !== undefined && tdsValue !== null) {
       if (tdsValue < 600) {
         recommendations.push({
@@ -159,7 +241,7 @@ export default function WaterTank() {
     }
 
     // pH recommendations
-    const phValue = latestSensor.ph;
+    const phValue = latestReading.ph;
     if (phValue !== undefined && phValue !== null) {
       if (phValue < 5.8) {
         recommendations.push({
@@ -179,7 +261,7 @@ export default function WaterTank() {
     }
 
     // Temperature recommendations
-    const tempValue = latestSensor.temp_water;
+    const tempValue = latestReading.temp_water;
     if (tempValue !== undefined && tempValue !== null) {
       if (tempValue < 18) {
         recommendations.push({
@@ -213,7 +295,16 @@ export default function WaterTank() {
 
   const recommendations = getRecommendations();
 
-  const trendLabels = sensorData.slice(0, 10).reverse().map(d => formatTime(d.timestamp));
+  // Prepare trend data for the chart (last 24 hours, hourly readings)
+  const trendLabels = last24HoursData
+    .map(d => {
+      const manilaTime = new Date(d.parsedTimestamp);
+      return manilaTime.toLocaleTimeString('en-US', {
+        hour: '2-digit',
+        hour12: true,
+        timeZone: 'Asia/Manila'
+      });
+    }).reverse(); // Reverse for chart to show oldest to newest
 
   const selectedSensorInfo = sensors.find(s => s.key === selectedSensor) || sensors[0];
   const selectedSensorData = {
@@ -221,8 +312,9 @@ export default function WaterTank() {
     datasets: [
       {
         label: `${selectedSensorInfo.label} (${selectedSensorInfo.unit})`,
-        data: sensorData.slice(0, 10).reverse().map(d =>
-          d[selectedSensor] ? Number(d[selectedSensor]).toFixed(2) : null),
+        data: last24HoursData
+          .map(d => d[selectedSensor] ? Number(d[selectedSensor]).toFixed(2) : null)
+          .reverse(), // Reverse data points to match labels
         borderColor: '#3b82f6',
         backgroundColor: 'rgba(59, 130, 246, 0.1)',
         tension: 0.3,
@@ -309,7 +401,13 @@ export default function WaterTank() {
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-800">Water Tank Monitoring</h1>
               <p className="text-sm text-gray-500 mt-1 flex items-center">
                 <FiClock className="mr-1.5" />
-                Last updated: {lastUpdated ? `${formatDate(lastUpdated)} at ${lastUpdated.toLocaleTimeString()}` : 'N/A'}
+                Last updated: {lastUpdated ?
+                  `${formatDate(lastUpdated)} at ${lastUpdated.toLocaleTimeString([], {
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    timeZone: 'Asia/Manila'
+                  })} (Manila Time)` :
+                  'N/A'}
               </p>
             </div>
           </div>
@@ -319,8 +417,8 @@ export default function WaterTank() {
               onClick={fetchData}
               disabled={isRefreshing}
               className={`flex items-center px-4 py-2 rounded-lg transition-colors ${isRefreshing
-                  ? 'bg-gray-200 text-gray-500'
-                  : 'bg-white text-green-600 hover:bg-green-50 border border-green-200'
+                ? 'bg-gray-200 text-gray-500'
+                : 'bg-white text-green-600 hover:bg-green-50 border border-green-200'
                 }`}
             >
               <FiRefreshCw className={`mr-2 ${isRefreshing ? 'animate-spin' : ''}`} />
@@ -331,8 +429,8 @@ export default function WaterTank() {
               <button
                 onClick={() => setActiveTab('dashboard')}
                 className={`px-4 py-2 rounded-lg transition-colors flex items-center ${activeTab === 'dashboard'
-                    ? 'bg-green-500 text-white shadow-md'
-                    : 'text-gray-500 hover:bg-gray-100'
+                  ? 'bg-green-500 text-white shadow-md'
+                  : 'text-gray-500 hover:bg-gray-100'
                   }`}
               >
                 <FiHome className="mr-2" /> Dashboard
@@ -340,8 +438,8 @@ export default function WaterTank() {
               <button
                 onClick={() => setActiveTab('trends')}
                 className={`px-4 py-2 rounded-lg transition-colors flex items-center ${activeTab === 'trends'
-                    ? 'bg-green-500 text-white shadow-md'
-                    : 'text-gray-500 hover:bg-gray-100'
+                  ? 'bg-green-500 text-white shadow-md'
+                  : 'text-gray-500 hover:bg-gray-100'
                   }`}
               >
                 <FiTrendingUp className="mr-2" /> Trends
@@ -350,13 +448,30 @@ export default function WaterTank() {
           </div>
         </div>
 
+        {/* Error Message */}
+        {fetchError && (
+          <div className="bg-red-50 border-l-4 border-red-500 p-4 mb-6 rounded-md">
+            <div className="flex items-start">
+              <FiAlertTriangle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
+              <div className="ml-3">
+                <p className="text-sm text-red-700">
+                  <strong>Data fetch error:</strong> {fetchError}
+                </p>
+                <p className="text-sm text-red-700 mt-1">
+                  Please check your network connection or try again later.
+                </p>
+              </div>
+            </div>
+          </div>
+        )}
+
         {activeTab === 'dashboard' ? (
           <>
             {/* Summary Cards */}
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
               <div className={`bg-gradient-to-r ${pumpStatus === "ON"
-                  ? "from-yellow-500 to-orange-500 text-white"
-                  : "from-green-500 to-green-800 text-white"
+                ? "from-yellow-500 to-orange-500 text-white"
+                : "from-green-500 to-green-800 text-white"
                 } p-6 rounded-xl shadow-md`}>
                 <div className="flex justify-between items-start">
                   <div>
@@ -367,11 +482,11 @@ export default function WaterTank() {
                     <p className="text-sm mt-1 flex items-center opacity-90">
                       {pumpStatus === "ON" ? (
                         <>
-                          <FiSun className="mr-1.5" /> Active (6AM-6PM)
+                          <FiSun className="mr-1.5" /> Active (6AM-6PM Manila Time)
                         </>
                       ) : (
                         <>
-                          <FiMoon className="mr-1.5" /> Inactive (6PM-6AM)
+                          <FiMoon className="mr-1.5" /> Inactive (6PM-6AM Manila Time)
                         </>
                       )}
                     </p>
@@ -387,13 +502,13 @@ export default function WaterTank() {
               </div>
 
               {sensors.map(sensor => {
-                const value = latestSensor[sensor.key];
+                const value = latestReading[sensor.key];
                 const status = getSensorStatus(value, sensor.min, sensor.max);
                 const bgColors = {
-                  normal: 'from-gray-400 to-gray-500',   // for missing data
+                  normal: 'from-gray-400 to-gray-500',
                   warning: 'from-yellow-500 to-amber-500',
                   critical: 'from-red-500 to-rose-500',
-                  optimal: 'from-green-500 to-emerald-500',   // now optimal is green
+                  optimal: 'from-green-500 to-emerald-500',
                 };
 
                 const colorClass = bgColors[status] || bgColors.normal;
@@ -439,7 +554,7 @@ export default function WaterTank() {
                 </h2>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                   {sensors.map(sensor => {
-                    const value = latestSensor[sensor.key];
+                    const value = latestReading[sensor.key];
                     const status = getSensorStatus(value, sensor.min, sensor.max);
                     return (
                       <SensorCard
@@ -461,8 +576,8 @@ export default function WaterTank() {
                         <p className="text-2xl font-bold mt-2 text-gray-800">{pumpStatus}</p>
                       </div>
                       <div className={`px-3 py-1 rounded-full text-xs font-medium ${pumpStatus === "ON"
-                          ? 'bg-amber-100 text-amber-800'
-                          : 'bg-indigo-100 text-indigo-800'
+                        ? 'bg-amber-100 text-amber-800'
+                        : 'bg-indigo-100 text-indigo-800'
                         }`}>
                         {pumpStatus === "ON" ? "Active" : "Inactive"}
                       </div>
@@ -481,10 +596,10 @@ export default function WaterTank() {
                     <div
                       key={index}
                       className={`p-4 rounded-lg border-l-4 ${rec.status === 'critical'
-                          ? 'border-red-500 bg-red-50'
-                          : rec.status === 'warning'
-                            ? 'border-yellow-500 bg-yellow-50'
-                            : 'border-green-500 bg-green-50'
+                        ? 'border-red-500 bg-red-50'
+                        : rec.status === 'warning'
+                          ? 'border-yellow-500 bg-yellow-50'
+                          : 'border-green-500 bg-green-50'
                         }`}
                     >
                       <div className="flex items-start">
@@ -504,71 +619,87 @@ export default function WaterTank() {
               </div>
             </div>
 
-            {/* Recent Readings Table */}
-            <div className="bg-white rounded-xl shadow-sm overflow-hidden">
-              <div className="p-5 border-b">
-                <h2 className="text-lg font-semibold text-gray-700 flex items-center">
-                  <FiClock className="mr-2 text-blue-500" /> Recent Sensor Readings
-                </h2>
-              </div>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200 text-sm">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
-                      {sensors.map(sensor => (
-                        <th key={sensor.key} className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                          {sensor.label}
-                        </th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {sensorData.slice(0, 8).map((reading, idx) => (
-                      <tr key={idx} className="hover:bg-blue-50 transition-colors">
-                        <td className="px-5 py-4 text-gray-500 whitespace-nowrap font-medium">
-                          {formatTime(reading.timestamp)}
-                        </td>
-                        {sensors.map(sensor => {
-                          const value = reading[sensor.key];
-                          const status = getSensorStatus(value, sensor.min, sensor.max);
-                          const statusColors = {
-                            critical: 'text-red-600',
-                            warning: 'text-yellow-600',
-                            normal: 'text-gray-800',
-                            optimal: 'text-green-600',
-                          };
+            {/* Recent Readings Table - Modified to only show last 10 readings */}
+<div className="bg-white rounded-xl shadow-sm overflow-hidden">
+  <div className="p-5 border-b">
+    <h2 className="text-lg font-semibold text-gray-700 flex items-center">
+      <FiClock className="mr-2 text-blue-500" /> Recent Sensor Readings (Last 10 Hours - Manila Time)
+    </h2>
+  </div>
+  <div className="overflow-x-auto">
+    <table className="min-w-full divide-y divide-gray-200 text-sm">
+      <thead className="bg-gray-50">
+        <tr>
+          <th className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Time</th>
+          {sensors.map(sensor => (
+            <th key={sensor.key} className="px-5 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+              {sensor.label}
+            </th>
+          ))}
+        </tr>
+      </thead>
+      <tbody className="bg-white divide-y divide-gray-200">
+        {last24HoursData.map((reading, idx) => {
+          const manilaTime = new Date(reading.parsedTimestamp);
+          const formattedTime = manilaTime.toLocaleTimeString('en-US', {
+            hour: '2-digit',
+            minute: '2-digit',
+            hour12: true,
+            timeZone: 'Asia/Manila'
+          });
+          
+          // Highlight current hour row
+          const currentHour = getManilaTime().getHours();
+          const isCurrentHour = manilaTime.getHours() === currentHour;
+          
+          return (
+            <tr key={idx} className={`hover:bg-blue-50 transition-colors ${isCurrentHour ? 'bg-blue-50' : ''}`}>
+              <td className={`px-5 py-4 whitespace-nowrap font-medium ${isCurrentHour ? 'text-blue-600 font-semibold' : 'text-gray-500'}`}>
+                {formattedTime}
+                {isCurrentHour && <span className="ml-2 text-xs bg-blue-100 text-blue-800 px-2 py-1 rounded-full">Current</span>}
+              </td>
+              {sensors.map(sensor => {
+                const value = reading[sensor.key];
+                const status = getSensorStatus(value, sensor.min, sensor.max);
+                const statusColors = {
+                  critical: 'text-red-600',
+                  warning: 'text-yellow-600',
+                  normal: 'text-gray-800',
+                  optimal: 'text-green-600',
+                };
 
-                          return (
-                            <td
-                              key={sensor.key}
-                              className={`px-5 py-4 whitespace-nowrap font-medium ${statusColors[status] || 'text-gray-800'}`}
-                            >
-                              {value !== undefined && value !== null ?
-                                `${Number(value).toFixed(2)} ${sensor.unit}` :
-                                'N/A'}
-                            </td>
-                          );
-                        })}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
+                return (
+                  <td
+                    key={sensor.key}
+                    className={`px-5 py-4 whitespace-nowrap font-medium ${statusColors[status] || 'text-gray-800'}`}
+                  >
+                    {value !== undefined && value !== null ?
+                      `${Number(value).toFixed(2)} ${sensor.unit}` :
+                      'N/A'}
+                  </td>
+                );
+              })}
+            </tr>
+          );
+        })}
+      </tbody>
+    </table>
+  </div>
+</div>
+
           </>
         ) : (
           <div className="bg-white rounded-xl shadow-sm">
             <div className="p-5 border-b">
               <h2 className="text-lg font-semibold text-gray-700 flex items-center">
-                <FiTrendingUp className="mr-2 text-blue-500" /> Sensor Trends
+                <FiTrendingUp className="mr-2 text-blue-500" /> Sensor Trends (Last 24 Hours - Manila Time)
               </h2>
             </div>
             <div className="p-5">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between mb-6">
                 <div>
                   <h3 className="font-medium text-gray-700">{selectedSensorInfo.label} Trend</h3>
-                  <p className="text-sm text-gray-500">Last 10 readings</p>
+                  <p className="text-sm text-gray-500">Hourly readings from the last 24 hours</p>
                 </div>
                 <div className="mt-3 sm:mt-0">
                   <div className="flex flex-wrap gap-2">
@@ -577,8 +708,8 @@ export default function WaterTank() {
                         key={sensor.key}
                         onClick={() => setSelectedSensor(sensor.key)}
                         className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${selectedSensor === sensor.key
-                            ? 'bg-blue-500 text-white shadow-md'
-                            : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
+                          ? 'bg-blue-500 text-white shadow-md'
+                          : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
                           }`}
                       >
                         {sensor.label}
@@ -594,7 +725,7 @@ export default function WaterTank() {
                 <div className="flex items-start">
                   <FiInfo className="text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
                   <p className="text-sm text-blue-700">
-                    The chart shows the trend of {selectedSensorInfo.label.toLowerCase()} over time.
+                    The chart shows the hourly trend of {selectedSensorInfo.label.toLowerCase()} over the last 24 hours.
                     {selectedSensorInfo.min && selectedSensorInfo.max &&
                       ` Optimal range is between ${selectedSensorInfo.min}${selectedSensorInfo.unit} and ${selectedSensorInfo.max}${selectedSensorInfo.unit}.`}
                   </p>
@@ -606,7 +737,7 @@ export default function WaterTank() {
 
         {/* Footer */}
         <div className="mt-8 text-center text-sm text-gray-500">
-          <p>Water Tank Monitoring System • Data updates every 5 minutes</p>
+          <p>Water Tank Monitoring System • Data updates every 1 hour • Manila Time (UTC+8)</p>
         </div>
       </div>
     </div>

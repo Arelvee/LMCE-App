@@ -10,9 +10,9 @@ export async function GET() {
       driver: sqlite3.Database,
     });
 
-    // Fetch all forecasts
     const rows = await db.all(`
       SELECT 
+        batch_start,
         stage_name,
         stage_date,
         yield_predicted,
@@ -22,24 +22,29 @@ export async function GET() {
       ORDER BY DATE(stage_date) ASC
     `);
 
-    // Transform rows into desired structure
     const forecasts = rows.map(row => ({
+      batch_start: row.batch_start,
       stage_name: row.stage_name,
       stage_date: row.stage_date,
       yield_predicted: row.yield_predicted,
-      yield_status: row.yield_status || 'normal',
+      status: row.status || 'normal',
       notes: row.notes || '',
-      yield_date: row.stage_date,  // Same as stage_date for simplicity
+      yield_date: row.stage_date, // Optional: consider removing if redundant
     }));
+
+    await db.close(); // ✅ Clean up
 
     return new Response(JSON.stringify(forecasts), {
       status: 200,
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Access-Control-Allow-Origin': '*',
+      },
     });
 
   } catch (error) {
-    console.error('Prediction API error:', error);
-    return new Response(JSON.stringify({ error: error.message }), {
+    console.error('Prediction API error:', error.stack);
+    return new Response(JSON.stringify({ error: 'Internal Server Error' }), {
       status: 500,
     });
   }
